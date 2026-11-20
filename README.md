@@ -4,8 +4,10 @@
 [![rank](https://make.fun/badge/github-core-clone-01/ducduymmhm/git-forge/rank.svg)](https://make.fun/bounty/github-core-clone-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=github-core-clone-01)
 [![reward](https://make.fun/badge/github-core-clone-01/ducduymmhm/git-forge/reward.svg)](https://make.fun/bounty/github-core-clone-01?utm_source=github&utm_medium=readme&utm_campaign=github-core-clone-01)
 
-A standalone, GitHub-compatible git forge in one Node 22 process, with no dependencies and no git binary.
-It serves its own in-memory store over four surfaces:
+A standalone, GitHub-compatible git forge in one process, with no dependencies and no git binary. It
+ships as a static Go binary (`bin/forge`, built from `go/`) that `main.ts` launches, with a complete
+Node 22 implementation of the same forge in `src/` as the fallback. It serves its own in-memory store
+over four surfaces:
 
 - **Git smart HTTP** at `/{owner}/{repo}.git`: upload-pack protocol v2 (`ls-refs`, `fetch` with shallow,
   deepen and thin haves) and v0, plus receive-pack v0 with `report-status`, `side-band-64k`,
@@ -30,11 +32,19 @@ PORT=8000 node main.ts
 Under the make.fun harness (`MAKEFUN_ENV_URL` set), it binds an ephemeral port, registers it, and exits
 once the suite reports that it is done.
 
+Rebuild the binary after changing `go/`:
+
+```sh
+cd go && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ../bin/forge .
+```
+
 ## Layout
 
 | file | what |
 | --- | --- |
-| `main.ts` | the lifecycle: listen, register, wait for done |
+| `main.ts` | the launcher: runs `bin/forge`, or the Node forge as a fallback |
+| `go/` | the Go forge: raw HTTP/1.1 server, git, REST, GraphQL and MCP |
+| `src/http1.ts` | the Node fallback's raw HTTP/1.1 server |
 | `src/server.ts` | HTTP routing, auth, response headers |
 | `src/git.ts` | objects, trees, commits, pkt-lines, packfiles, deltas |
 | `src/store.ts` | repositories, refs, issues, pulls; merges and diffs |

@@ -1,14 +1,15 @@
-// git-forge: a standalone GitHub-compatible forge in one Node process.
+// git-forge: a standalone GitHub-compatible forge.
 //
 // The trial lifecycle: bind an ephemeral port, POST it to $MAKEFUN_ENV_URL/register, serve the suite
 // (git smart HTTP, REST v3, GraphQL v4 and MCP), and poll $MAKEFUN_ENV_URL/done until the suite is
 // finished, then exit 0. Run outside a trial (no MAKEFUN_ENV_URL) it simply serves on PORT (or an
 // ephemeral port) until stopped.
 //
-// V8 tuning the harness cannot pass on its command line: one thread (no GC or compiler helper
-// threads, so no cross-thread futex wake-ups per request) and a large young generation (few
-// scavenges). The launcher re-executes this file once with those flags and mirrors the child's exit;
-// if the child cannot be started, it serves in-process instead.
+// Two implementations of the same forge live here. On Linux amd64 the launcher runs bin/forge, the
+// static binary built from go/ (`cd go && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o
+// ../bin/forge .`). Anywhere else, or if that binary cannot start, it runs the Node forge in src/,
+// re-executed once with V8 tuning the harness cannot pass on its command line: one thread (no
+// helper-thread futex wake-ups per request) and a large young generation (few scavenges).
 
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -103,9 +104,55 @@ function runInProcess(): void {
   });
 }
 
+/**
+ * The fast path: the forge compiled from go/ into a static Linux amd64 binary at bin/forge. It speaks
+ * the same lifecycle (register, serve, wait for done). If it cannot start, or dies at once, the Node
+ * forge below serves instead.
+ */
+function runNative(onFailure: () => void): void {
+  const binary = fileURLToPath(new URL('./bin/forge', import.meta.url));
+  const startedAt = Date.now();
+  let failed = false;
+  const fail = (): void => {
+    if (failed) return;
+    failed = true;
+    onFailure();
+  };
+  let child;
+  try {
+    child = spawn(binary, [], { stdio: 'inherit', env: process.env });
+  } catch {
+    fail();
+    return;
+  }
+  child.on('error', fail);
+  child.on('exit', (code, signal) => {
+    if (failed) return;
+    if (code !== 0 && signal === null && Date.now() - startedAt < 3_000) {
+      fail();
+      return;
+    }
+    process.exit(code ?? (signal === null ? 0 : 1));
+  });
+  for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+    process.on(signal, () => {
+      if (!failed) child.kill(signal);
+    });
+  }
+}
+
 if (process.env.FORGE_TUNED === '1' || process.env.FORGE_NO_TUNING === '1') {
   runInProcess();
+} else if (process.platform === 'linux' && process.arch === 'x64' && process.env.FORGE_NO_NATIVE !== '1') {
+  runNative(() => {
+    process.env.FORGE_NO_NATIVE = '1';
+    runTuned();
+  });
 } else {
+  runTuned();
+}
+
+function runTuned(): void {
   const child = spawn(process.execPath, [...TUNING, fileURLToPath(import.meta.url)], {
     stdio: 'inherit',
     env: { ...process.env, FORGE_TUNED: '1' },
