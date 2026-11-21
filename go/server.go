@@ -47,7 +47,7 @@ func serveConn(conn net.Conn, handle func(*Request) *Response) {
 	if tc, ok := conn.(*net.TCPConn); ok {
 		tc.SetNoDelay(true)
 	}
-	br := bufio.NewReaderSize(conn, 64<<10)
+	br := bufio.NewReaderSize(newConnReader(conn), 64<<10)
 	var out []byte
 	for {
 		req, keepAlive, err := readRequest(br)

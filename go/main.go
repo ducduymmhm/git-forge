@@ -26,8 +26,9 @@ func logf(format string, args ...any) {
 }
 
 func main() {
-	// The store is small and short-lived: collect rarely.
-	debug.SetGCPercent(400)
+	// The store is small and short-lived: collect only when memory runs high (the trial allows 1 GiB).
+	debug.SetGCPercent(-1)
+	debug.SetMemoryLimit(640 << 20)
 	login := os.Getenv("MAKEFUN_FORGE_LOGIN")
 	if login == "" {
 		login = os.Getenv("FORGE_LOGIN")
