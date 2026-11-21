@@ -14,7 +14,9 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"runtime"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -26,9 +28,9 @@ func logf(format string, args ...any) {
 }
 
 func main() {
-	// The store is small and short-lived: collect only when memory runs high (the trial allows 1 GiB).
-	debug.SetGCPercent(-1)
-	debug.SetMemoryLimit(640 << 20)
+	// The store is small and short-lived: collect rarely.
+	debug.SetGCPercent(400)
+	capProcs()
 	login := os.Getenv("MAKEFUN_FORGE_LOGIN")
 	if login == "" {
 		login = os.Getenv("FORGE_LOGIN")
@@ -103,4 +105,47 @@ func main() {
 	}
 	fmt.Println("[forge] done")
 	os.Exit(0)
+}
+
+// capProcs sets GOMAXPROCS to the container's CPU quota. Go 1.24 sizes it from the CPUs it can see,
+// which in a sandbox can be the whole node: many idle Ps mean extra threads and wake-ups on every
+// request. The quota comes from cgroup v2 cpu.max or v1 cfs files; when neither is readable it falls
+// back to the trial's documented limit of 2 CPUs.
+func capProcs() {
+	if os.Getenv("GOMAXPROCS") != "" {
+		return
+	}
+	n := 2
+	if q, p, ok := cpuQuota(); ok {
+		n = (q + p - 1) / p
+		if n < 2 {
+			n = 2
+		}
+	}
+	if n < runtime.GOMAXPROCS(0) {
+		runtime.GOMAXPROCS(n)
+	}
+}
+
+func cpuQuota() (quota, period int, ok bool) {
+	if b, err := os.ReadFile("/sys/fs/cgroup/cpu.max"); err == nil {
+		f := strings.Fields(string(b))
+		if len(f) == 2 && f[0] != "max" {
+			q, e1 := strconv.Atoi(f[0])
+			p, e2 := strconv.Atoi(f[1])
+			if e1 == nil && e2 == nil && q > 0 && p > 0 {
+				return q, p, true
+			}
+		}
+	}
+	qb, e1 := os.ReadFile("/sys/fs/cgroup/cpu/cpu.cfs_quota_us")
+	pb, e2 := os.ReadFile("/sys/fs/cgroup/cpu/cpu.cfs_period_us")
+	if e1 == nil && e2 == nil {
+		q, e3 := strconv.Atoi(strings.TrimSpace(string(qb)))
+		p, e4 := strconv.Atoi(strings.TrimSpace(string(pb)))
+		if e3 == nil && e4 == nil && q > 0 && p > 0 {
+			return q, p, true
+		}
+	}
+	return 0, 0, false
 }
